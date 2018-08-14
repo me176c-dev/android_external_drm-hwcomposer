@@ -59,13 +59,32 @@ int DrmHwcBuffer::ImportBuffer(buffer_handle_t handle, Importer *importer) {
   return 0;
 }
 
+static native_handle_t* native_handle_clone(const native_handle_t* handle)
+{
+    native_handle_t* clone = native_handle_create(handle->numFds, handle->numInts);
+    int i;
+    for (i = 0; i < handle->numFds; i++) {
+        clone->data[i] = dup(handle->data[i]);
+        if (clone->data[i] < 0) {
+            clone->numFds = i;
+            native_handle_close(clone);
+            native_handle_delete(clone);
+            return NULL;
+        }
+    }
+    memcpy(&clone->data[handle->numFds], &handle->data[handle->numFds],
+            sizeof(int) * handle->numInts);
+    return clone;
+}
+
 int DrmHwcNativeHandle::CopyBufferHandle(buffer_handle_t handle) {
-  native_handle_t *handle_copy;
+  native_handle_t *handle_copy = native_handle_clone(handle);
   GraphicBufferMapper &gm(GraphicBufferMapper::get());
-  int ret =
-      gm.importBuffer(handle, const_cast<buffer_handle_t *>(&handle_copy));
+  int ret = gm.registerBuffer(handle_copy);
   if (ret) {
     ALOGE("Failed to import buffer handle %d", ret);
+    native_handle_close(handle_copy);
+    native_handle_delete(handle_copy);
     return ret;
   }
 
@@ -83,10 +102,12 @@ DrmHwcNativeHandle::~DrmHwcNativeHandle() {
 void DrmHwcNativeHandle::Clear() {
   if (handle_ != NULL) {
     GraphicBufferMapper &gm(GraphicBufferMapper::get());
-    int ret = gm.freeBuffer(handle_);
+    int ret = gm.unregisterBuffer(handle_);
     if (ret) {
       ALOGE("Failed to free buffer handle %d", ret);
     }
+    native_handle_close(handle_);
+    native_handle_delete(handle_);
     handle_ = NULL;
   }
 }
